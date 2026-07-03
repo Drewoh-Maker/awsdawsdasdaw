@@ -1,32 +1,206 @@
-name: Auto Renew Tickhosting
+import os
+import time
+import undetected_chromedriver as uc
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import TimeoutException, NoSuchElementException
 
-on:
-  schedule:
-    - cron: '0 */4 * * *'
-  workflow_dispatch:
+# Configuración
+EMAIL = os.getenv('EMAIL')
+PASSWORD = os.getenv('PASSWORD')
+PTERODACTYL_SESSION = os.getenv('PTERODACTYL_SESSION')
+SERVER_URL = 'https://tickhosting.com/server/47cb3db3'  # Cambia esto si es diferente
 
-jobs:
-  renew:
-    runs-on: ubuntu-latest
+def renew_server():
+    driver = None
+    try:
+        print("🔄 Iniciando navegador...")
+        
+        # Configurar undetected-chromedriver
+        options = uc.ChromeOptions()
+        options.add_argument('--no-sandbox')
+        options.add_argument('--disable-dev-shm-usage')
+        options.add_argument('--disable-gpu')
+        options.add_argument('--window-size=1920,1080')
+        
+        driver = uc.Chrome(options=options)
+        driver.set_page_load_timeout(60)
+        
+        print("✅ Navegador iniciado")
+        
+        # 1. Ir a la página principal
+        print("🌐 Navegando a Tickhosting...")
+        driver.get('https://tickhosting.com')
+        time.sleep(5)
+        
+        # 2. Si pide captcha, esperar (sin resolverlo, no podemos)
+        if "Just a moment" in driver.title or "verify" in driver.title.lower():
+            print("⏳ Cloudflare detectado. Esperando 10 segundos...")
+            time.sleep(10)
+            driver.refresh()
+            time.sleep(5)
+        
+        # 3. Intentar login con cookies
+        if PTERODACTYL_SESSION:
+            print("🍪 Intentando login con cookies...")
+            driver.get('https://tickhosting.com')
+            time.sleep(2)
+            
+            # Añadir cookie
+            cookie = {
+                'name': 'pterodactyl_panel_session',
+                'value': PTERODACTYL_SESSION,
+                'domain': '.tickhosting.com',
+                'path': '/',
+                'secure': True,
+                'sameSite': 'Lax'
+            }
+            driver.add_cookie(cookie)
+            driver.refresh()
+            time.sleep(3)
+            
+            # Verificar si funcionó
+            current_url = driver.current_url
+            if 'login' not in current_url and 'auth' not in current_url:
+                print("✅ Login con cookies exitoso")
+            else:
+                print("⚠️ Falló login con cookies, intentando con email/password...")
+                login_with_email_password(driver)
+        else:
+            print("⚠️ No hay cookie, intentando login con email/password...")
+            login_with_email_password(driver)
+        
+        # 4. Navegar al servidor
+        print(f"🎯 Navegando al servidor: {SERVER_URL}")
+        driver.get(SERVER_URL)
+        time.sleep(5)
+        
+        # 5. Buscar y hacer clic en el botón de renovar
+        print("🔍 Buscando botón de renovar...")
+        try:
+            # Esperar que cargue la página del servidor
+            WebDriverWait(driver, 20).until(
+                EC.presence_of_element_located((By.TAG_NAME, "body"))
+            )
+            
+            # Buscar botón por texto
+            buttons = driver.find_elements(By.TAG_NAME, "button")
+            renew_btn = None
+            
+            for btn in buttons:
+                text = btn.text.lower()
+                if 'renew' in text or 'renovar' in text or '+4h' in text:
+                    renew_btn = btn
+                    break
+            
+            # Si no lo encuentra, buscar por clase
+            if not renew_btn:
+                renew_btn = driver.find_element(By.CSS_SELECTOR, ".btn-primary, .renew-btn, [class*='renew']")
+            
+            if renew_btn:
+                print("✅ Botón de renovar encontrado. Haciendo clic...")
+                renew_btn.click()
+                time.sleep(5)
+                print("🎉 ¡Servidor renovado con éxito!")
+                return True
+            else:
+                print("❌ No se encontró el botón de renovar")
+                return False
+                
+        except NoSuchElementException:
+            print("❌ No se encontró el botón de renovar")
+            return False
+        except TimeoutException:
+            print("❌ Timeout esperando la página del servidor")
+            return False
+            
+    except Exception as e:
+        print(f"❌ Error: {e}")
+        return False
+    finally:
+        if driver:
+            driver.quit()
+            print("🔚 Navegador cerrado")
+
+def login_with_email_password(driver):
+    """Intenta iniciar sesión con email y contraseña"""
+    try:
+        print("🔐 Intentando login con email/password...")
+        driver.get('https://tickhosting.com/auth/login')
+        time.sleep(5)
+        
+        # Buscar campos de email y password
+        email_input = None
+        password_input = None
+        
+        # Intentar diferentes selectores
+        selectors = [
+            ("name", "email"),
+            ("id", "email"),
+            ("name", "username"),
+            ("type", "email"),
+            ("placeholder", "email"),
+        ]
+        
+        for by, value in selectors:
+            try:
+                if by == "name":
+                    email_input = driver.find_element(By.NAME, value)
+                elif by == "id":
+                    email_input = driver.find_element(By.ID, value)
+                elif by == "type":
+                    email_input = driver.find_element(By.CSS_SELECTOR, f"input[type='{value}']")
+                elif by == "placeholder":
+                    email_input = driver.find_element(By.CSS_SELECTOR, f"input[placeholder*='{value}']")
+                if email_input:
+                    break
+            except:
+                continue
+        
+        # Buscar password
+        password_input = driver.find_element(By.NAME, "password")
+        if not password_input:
+            password_input = driver.find_element(By.ID, "password")
+        if not password_input:
+            password_input = driver.find_element(By.CSS_SELECTOR, "input[type='password']")
+        
+        if email_input and password_input:
+            email_input.clear()
+            email_input.send_keys(EMAIL)
+            password_input.clear()
+            password_input.send_keys(PASSWORD)
+            
+            # Buscar botón de submit
+            submit_btn = driver.find_element(By.CSS_SELECTOR, "button[type='submit'], input[type='submit']")
+            submit_btn.click()
+            time.sleep(5)
+            
+            print("✅ Login con email/password completado")
+            return True
+        else:
+            print("❌ No se encontraron los campos de login")
+            return False
+            
+    except Exception as e:
+        print(f"❌ Error en login: {e}")
+        return False
+
+if __name__ == "__main__":
+    print("=" * 50)
+    print("🚀 Iniciando proceso de renovación automática")
+    print("=" * 50)
     
-    steps:
-    - uses: actions/checkout@v4
+    success = renew_server()
     
-    - name: Setup Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.10'
+    # Guardar resultado
+    with open('last_renew_data.txt', 'w') as f:
+        f.write(f"Server ID: 47cb3db3\n")
+        f.write(f"Renew status: {'Success' if success else 'Failed'}\n")
+        f.write(f"Last renewal time: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+        if not success:
+            f.write("Error: Could not renew server\n")
     
-    - name: Install dependencies
-      run: |
-        pip install -r requirements.txt
-        sudo apt-get update
-        sudo apt-get install -y xvfb
-    
-    - name: Run auto renew
-      env:
-        EMAIL: ${{ secrets.EMAIL }}
-        PASSWORD: ${{ secrets.PASSWORD }}
-        PTERODACTYL_SESSION: ${{ secrets.PTERODACTYL_SESSION }}
-      run: |
-        xvfb-run python auto_renew.py
+    print("=" * 50)
+    print(f"📊 Resultado: {'✅ ÉXITO' if success else '❌ FALLÓ'}")
+    print("=" * 50)
