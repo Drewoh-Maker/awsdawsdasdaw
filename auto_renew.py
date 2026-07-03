@@ -21,7 +21,16 @@ TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID', '')
 
 def setup_driver():
     options = webdriver.ChromeOptions()
-    options.add_argument('--headless')
+    # Quita el modo headless para que sea más difícil de detectar
+    # options.add_argument('--headless')  # COMENTA ESTA LÍNEA
+    
+    # Añade estas opciones para evitar detección
+    options.add_argument('--disable-blink-features=AutomationControlled')
+    options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    options.add_experimental_option('useAutomationExtension', False)
+    
+    # Usa un user-agent real
+    options.add_argument('user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36')
     options.add_argument('--no-sandbox')
     options.add_argument('--disable-dev-shm-usage')
     options.add_argument('--disable-gpu')
